@@ -1,0 +1,73 @@
+# CloudFormation Parameters File
+# Copy this file to parameters.json and fill in your values
+
+[
+  {
+    "ParameterKey": "LambdaFunctionName",
+    "ParameterValue": "voicemail-transcribe-email"
+  },
+  {
+    "ParameterKey": "LambdaTimeout",
+    "ParameterValue": "180"
+  },
+  {
+    "ParameterKey": "LambdaMemorySize",
+    "ParameterValue": "512"
+  },
+  {
+    "ParameterKey": "S3BucketName",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "S3BucketPrefix",
+    "ParameterValue": "connect/recordings"
+  },
+  {
+    "ParameterKey": "EnableS3Encryption",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "S3LifecycleDays",
+    "ParameterValue": "90"
+  },
+  {
+    "ParameterKey": "EmailSender",
+    "ParameterValue": "noreply@yourdomain.com"
+  },
+  {
+    "ParameterKey": "SESRegion",
+    "ParameterValue": "us-west-2"
+  },
+  {
+    "ParameterKey": "URLExpirationSeconds",
+    "ParameterValue": "604800"
+  },
+  {
+    "ParameterKey": "RecordingWaitTime",
+    "ParameterValue": "70"
+  },
+  {
+    "ParameterKey": "TranscriptionLanguage",
+    "ParameterValue": "en-US"
+  },
+  {
+    "ParameterKey": "ConnectInstanceId",
+    "ParameterValue": "a8fab42a-42a6-446d-b8fc-31ea25332f07"
+  },
+  {
+    "ParameterKey": "ConnectInstanceArn",
+    "ParameterValue": "arn:aws:connect:us-west-2:123456789012:instance/a8fab42a-42a6-446d-b8fc-31ea25332f07"
+  },
+  {
+    "ParameterKey": "EnableCloudWatchAlarms",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "AlarmEmail",
+    "ParameterValue": "alerts@yourdomain.com"
+  },
+  {
+    "ParameterKey": "LogRetentionDays",
+    "ParameterValue": "30"
+  }
+]

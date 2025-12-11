@@ -1,0 +1,319 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "6cee06e7-3d99-493a-a5c6-3c16ae13f8ad",
+  "Metadata": {
+    "entryPointPosition": {
+      "x": -289.6,
+      "y": 92.8
+    },
+    "ActionMetadata": {
+      "bcf8e00a-ca1d-4d67-b5b8-ee3a5c14f827": {
+        "position": {
+          "x": 2319.2,
+          "y": -38.4
+        }
+      },
+      "6cee06e7-3d99-493a-a5c6-3c16ae13f8ad": {
+        "position": {
+          "x": -117.6,
+          "y": 254.4
+        }
+      },
+      "NEEDED ATTRIBUTES": {
+        "position": {
+          "x": 140,
+          "y": 139.2
+        },
+        "isFriendlyName": true,
+        "dynamicParams": []
+      },
+      "Email": {
+        "position": {
+          "x": 1797.6,
+          "y": -279.2
+        },
+        "isFriendlyName": true,
+        "parameters": {
+          "LambdaFunctionARN": {
+            "displayName": "voicemail-transcribe-email"
+          }
+        },
+        "dynamicMetadata": {}
+      },
+      "de83483c-c806-40e0-86c9-9243142cb10d": {
+        "position": {
+          "x": 442.4,
+          "y": 72
+        }
+      },
+      "c8b94ae7-7fe0-490a-92d2-4f4b7868cad4": {
+        "position": {
+          "x": 694.4,
+          "y": 268.8
+        },
+        "parameters": {
+          "PromptId": {
+            "displayName": "Beep.wav"
+          }
+        },
+        "promptName": "Beep.wav"
+      },
+      "Email-copy-1": {
+        "position": {
+          "x": 808,
+          "y": -71.2
+        },
+        "isFriendlyName": true,
+        "parameters": {
+          "LambdaFunctionARN": {
+            "displayName": "voicemail-transcribe-email"
+          }
+        },
+        "dynamicMetadata": {}
+      },
+      "8b4a69ed-1915-4c3f-9c6f-ba8cfda3fc80": {
+        "position": {
+          "x": 1072,
+          "y": 97.6
+        }
+      },
+      "825a329b-fc9f-4c64-a5dc-c89df4de8001": {
+        "position": {
+          "x": 2020.8,
+          "y": -25.6
+        }
+      },
+      "e9960118-e9e5-46bd-8158-ec2b4b11b72d": {
+        "position": {
+          "x": 1280.8,
+          "y": -116.8
+        },
+        "conditionMetadata": [
+          {
+            "id": "7046225b-d75a-4bd2-8901-e101ee828857",
+            "value": "#"
+          }
+        ]
+      },
+      "8ea28fe0-ae5d-481e-96c3-8e08a5754c9c": {
+        "position": {
+          "x": 1530.4,
+          "y": -256
+        }
+      }
+    },
+    "Annotations": [],
+    "name": "VoiceMailModule",
+    "description": "",
+    "status": "published",
+    "settings": {},
+    "hash": {}
+  },
+  "Actions": [
+    {
+      "Parameters": {},
+      "Identifier": "bcf8e00a-ca1d-4d67-b5b8-ee3a5c14f827",
+      "Type": "DisconnectParticipant",
+      "Transitions": {}
+    },
+    {
+      "Parameters": {
+        "FlowLoggingBehavior": "Enabled"
+      },
+      "Identifier": "6cee06e7-3d99-493a-a5c6-3c16ae13f8ad",
+      "Type": "UpdateFlowLoggingBehavior",
+      "Transitions": {
+        "NextAction": "NEEDED ATTRIBUTES"
+      }
+    },
+    {
+      "Parameters": {
+        "Attributes": {
+          "emailRecipient": "godwill.achu.cho@gmail.com",
+          "RecipientName": "Godwill Cho"
+        },
+        "TargetContact": "Current"
+      },
+      "Identifier": "NEEDED ATTRIBUTES",
+      "Type": "UpdateContactAttributes",
+      "Transitions": {
+        "NextAction": "de83483c-c806-40e0-86c9-9243142cb10d",
+        "Errors": [
+          {
+            "NextAction": "de83483c-c806-40e0-86c9-9243142cb10d",
+            "ErrorType": "NoMatchingError"
+          }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "LambdaFunctionARN": "arn:aws:lambda:us-west-2:551642657889:function:voicemail-transcribe-email",
+        "InvocationTimeLimitSeconds": "8",
+        "InvocationType": "ASYNCHRONOUS",
+        "ResponseValidation": {
+          "ResponseType": "STRING_MAP"
+        }
+      },
+      "Identifier": "Email",
+      "Type": "InvokeLambdaFunction",
+      "Transitions": {
+        "NextAction": "825a329b-fc9f-4c64-a5dc-c89df4de8001",
+        "Errors": [
+          {
+            "NextAction": "825a329b-fc9f-4c64-a5dc-c89df4de8001",
+            "ErrorType": "NoMatchingError"
+          }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "Text": "Record a voice message after the beep. Save with a pound key"
+      },
+      "Identifier": "de83483c-c806-40e0-86c9-9243142cb10d",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "c8b94ae7-7fe0-490a-92d2-4f4b7868cad4",
+        "Errors": [
+          {
+            "NextAction": "c8b94ae7-7fe0-490a-92d2-4f4b7868cad4",
+            "ErrorType": "NoMatchingError"
+          }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "PromptId": "arn:aws:connect:us-west-2:551642657889:instance/a8fab42a-42a6-446d-b8fc-31ea25332f07/prompt/7d1705ea-01a6-4652-a7c8-85ffacf85224"
+      },
+      "Identifier": "c8b94ae7-7fe0-490a-92d2-4f4b7868cad4",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "Email-copy-1",
+        "Errors": [
+          {
+            "NextAction": "Email-copy-1",
+            "ErrorType": "NoMatchingError"
+          }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "LambdaFunctionARN": "arn:aws:lambda:us-west-2:551642657889:function:voicemail-transcribe-email",
+        "InvocationTimeLimitSeconds": "8",
+        "InvocationType": "ASYNCHRONOUS",
+        "ResponseValidation": {
+          "ResponseType": "STRING_MAP"
+        }
+      },
+      "Identifier": "Email-copy-1",
+      "Type": "InvokeLambdaFunction",
+      "Transitions": {
+        "NextAction": "8b4a69ed-1915-4c3f-9c6f-ba8cfda3fc80",
+        "Errors": [
+          {
+            "NextAction": "8b4a69ed-1915-4c3f-9c6f-ba8cfda3fc80",
+            "ErrorType": "NoMatchingError"
+          }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "RecordingBehavior": {
+          "RecordedParticipants": [],
+          "IVRRecordingBehavior": "Enabled"
+        }
+      },
+      "Identifier": "8b4a69ed-1915-4c3f-9c6f-ba8cfda3fc80",
+      "Type": "UpdateContactRecordingBehavior",
+      "Transitions": {
+        "NextAction": "e9960118-e9e5-46bd-8158-ec2b4b11b72d"
+      }
+    },
+    {
+      "Parameters": {
+        "Text": "Thank you. We will get back to you."
+      },
+      "Identifier": "825a329b-fc9f-4c64-a5dc-c89df4de8001",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "bcf8e00a-ca1d-4d67-b5b8-ee3a5c14f827",
+        "Errors": [
+          {
+            "NextAction": "bcf8e00a-ca1d-4d67-b5b8-ee3a5c14f827",
+            "ErrorType": "NoMatchingError"
+          }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "StoreInput": "False",
+        "InputTimeLimitSeconds": "5",
+        "SSML": "<speak>\n<break time=\"300\"/>\n</speak>"
+      },
+      "Identifier": "e9960118-e9e5-46bd-8158-ec2b4b11b72d",
+      "Type": "GetParticipantInput",
+      "Transitions": {
+        "NextAction": "8ea28fe0-ae5d-481e-96c3-8e08a5754c9c",
+        "Conditions": [
+          {
+            "NextAction": "8ea28fe0-ae5d-481e-96c3-8e08a5754c9c",
+            "Condition": {
+              "Operator": "Equals",
+              "Operands": [
+                "#"
+              ]
+            }
+          }
+        ],
+        "Errors": [
+          {
+            "NextAction": "8ea28fe0-ae5d-481e-96c3-8e08a5754c9c",
+            "ErrorType": "InputTimeLimitExceeded"
+          },
+          {
+            "NextAction": "8ea28fe0-ae5d-481e-96c3-8e08a5754c9c",
+            "ErrorType": "NoMatchingCondition"
+          },
+          {
+            "NextAction": "8ea28fe0-ae5d-481e-96c3-8e08a5754c9c",
+            "ErrorType": "NoMatchingError"
+          }
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "RecordingBehavior": {
+          "RecordedParticipants": [],
+          "IVRRecordingBehavior": "Disabled"
+        }
+      },
+      "Identifier": "8ea28fe0-ae5d-481e-96c3-8e08a5754c9c",
+      "Type": "UpdateContactRecordingBehavior",
+      "Transitions": {
+        "NextAction": "825a329b-fc9f-4c64-a5dc-c89df4de8001"
+      }
+    }
+  ],
+  "Settings": {
+    "InputParameters": [],
+    "OutputParameters": [],
+    "Transitions": [
+      {
+        "DisplayName": "Success",
+        "ReferenceName": "Success",
+        "Description": ""
+      },
+      {
+        "DisplayName": "Error",
+        "ReferenceName": "Error",
+        "Description": ""
+      }
+    ]
+  }
+}

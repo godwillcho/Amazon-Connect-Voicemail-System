@@ -1,0 +1,579 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon Connect Voicemail System - Complete infrastructure deployment'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Lambda Configuration"
+        Parameters:
+          - LambdaFunctionName
+          - LambdaTimeout
+          - LambdaMemorySize
+          
+      - Label:
+          default: "S3 Configuration"
+        Parameters:
+          - S3BucketName
+          - S3BucketPrefix
+          - EnableS3Encryption
+          - S3LifecycleDays
+          
+      - Label:
+          default: "Email Configuration"
+        Parameters:
+          - EmailSender
+          - SESRegion
+          
+      - Label:
+          default: "Voicemail Settings"
+        Parameters:
+          - URLExpirationSeconds
+          - RecordingWaitTime
+          - TranscriptionLanguage
+          
+      - Label:
+          default: "Amazon Connect"
+        Parameters:
+          - ConnectInstanceId
+          - ConnectInstanceArn
+          
+      - Label:
+          default: "Monitoring & Alerts"
+        Parameters:
+          - EnableCloudWatchAlarms
+          - AlarmEmail
+          - LogRetentionDays
+
+    ParameterLabels:
+      LambdaFunctionName:
+        default: "Lambda Function Name"
+      S3BucketName:
+        default: "S3 Bucket Name"
+      EmailSender:
+        default: "Email Sender Address"
+
+Parameters:
+  # Lambda Configuration
+  LambdaFunctionName:
+    Type: String
+    Default: voicemail-transcribe-email
+    Description: Name for the Lambda function
+    
+  LambdaTimeout:
+    Type: Number
+    Default: 180
+    MinValue: 60
+    MaxValue: 900
+    Description: Lambda function timeout in seconds
+    
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+    AllowedValues: [128, 256, 512, 1024, 2048, 3008]
+    Description: Lambda function memory in MB
+    
+  # S3 Configuration
+  S3BucketName:
+    Type: String
+    Description: Name for the S3 bucket (leave empty to auto-generate)
+    Default: ''
+    
+  S3BucketPrefix:
+    Type: String
+    Default: 'connect/recordings'
+    Description: Prefix path within bucket for recordings
+    
+  EnableS3Encryption:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Enable server-side encryption for S3 bucket
+    
+  S3LifecycleDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3650
+    Description: Days to retain voicemail recordings (0 to disable)
+    
+  # Email Configuration
+  EmailSender:
+    Type: String
+    Description: Email address to send voicemails from (must be verified in SES)
+    AllowedPattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    ConstraintDescription: Must be a valid email address
+    
+  SESRegion:
+    Type: String
+    Default: us-west-2
+    Description: AWS region where SES is configured
+    AllowedValues:
+      - us-east-1
+      - us-west-2
+      - eu-west-1
+      - eu-central-1
+      - ap-southeast-1
+      - ap-southeast-2
+      - ap-northeast-1
+    
+  # Voicemail Settings
+  URLExpirationSeconds:
+    Type: Number
+    Default: 604800
+    MinValue: 3600
+    MaxValue: 604800
+    Description: Presigned URL expiration (seconds, max 7 days)
+    
+  RecordingWaitTime:
+    Type: Number
+    Default: 70
+    MinValue: 30
+    MaxValue: 200
+    Description: Seconds to wait before searching for recording
+    
+  TranscriptionLanguage:
+    Type: String
+    Default: en-US
+    AllowedValues:
+      - en-US
+      - en-GB
+      - en-AU
+      - es-US
+      - es-ES
+      - fr-FR
+      - fr-CA
+      - de-DE
+      - it-IT
+      - pt-BR
+      - ja-JP
+      - ko-KR
+      - zh-CN
+    Description: Language for transcription
+    
+  # Amazon Connect
+  ConnectInstanceId:
+    Type: String
+    Description: Amazon Connect instance ID (e.g., a8fab42a-42a6-446d-b8fc-31ea25332f07)
+    AllowedPattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+    ConstraintDescription: Must be a valid Connect instance ID
+    
+  ConnectInstanceArn:
+    Type: String
+    Description: Amazon Connect instance ARN
+    AllowedPattern: '^arn:aws:connect:[a-z0-9-]+:[0-9]{12}:instance/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+    
+  # Monitoring
+  EnableCloudWatchAlarms:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create CloudWatch alarms for monitoring
+    
+  AlarmEmail:
+    Type: String
+    Description: Email address for CloudWatch alarm notifications (leave empty to skip)
+    Default: ''
+    
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+    Description: CloudWatch Logs retention period (days)
+
+Conditions:
+  CreateBucket: !Equals [!Ref S3BucketName, '']
+  EnableEncryption: !Equals [!Ref EnableS3Encryption, 'true']
+  EnableLifecycle: !Not [!Equals [!Ref S3LifecycleDays, 0]]
+  CreateAlarms: !Equals [!Ref EnableCloudWatchAlarms, 'true']
+  CreateAlarmTopic: !And
+    - !Condition CreateAlarms
+    - !Not [!Equals [!Ref AlarmEmail, '']]
+
+Resources:
+  # ============================================================================
+  # S3 BUCKET
+  # ============================================================================
+  
+  VoicemailBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateBucket
+    Properties:
+      BucketName: !Sub 'voicemail-recordings-${AWS::AccountId}'
+      BucketEncryption:
+        !If
+          - EnableEncryption
+          - ServerSideEncryptionConfiguration:
+              - ServerSideEncryptionByDefault:
+                  SSEAlgorithm: AES256
+          - !Ref AWS::NoValue
+      LifecycleConfiguration:
+        !If
+          - EnableLifecycle
+          - Rules:
+              - Id: DeleteOldRecordings
+                Status: Enabled
+                Prefix: !Sub '${S3BucketPrefix}/ivr/'
+                ExpirationInDays: !Ref S3LifecycleDays
+          - !Ref AWS::NoValue
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Application
+          Value: VoicemailSystem
+        - Key: ManagedBy
+          Value: CloudFormation
+          
+  VoicemailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: CreateBucket
+    Properties:
+      Bucket: !Ref VoicemailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowConnectPutObject
+            Effect: Allow
+            Principal:
+              Service: connect.amazonaws.com
+            Action:
+              - s3:PutObject
+              - s3:PutObjectAcl
+            Resource: !Sub '${VoicemailBucket.Arn}/${S3BucketPrefix}/*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Ref ConnectInstanceArn
+
+  # ============================================================================
+  # IAM ROLE AND POLICIES
+  # ============================================================================
+  
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${LambdaFunctionName}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: VoicemailProcessingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 Access
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:HeadObject
+                Resource:
+                  - !If
+                    - CreateBucket
+                    - !Sub '${VoicemailBucket.Arn}/*'
+                    - !Sub 'arn:aws:s3:::${S3BucketName}/*'
+              
+              # Transcribe Access
+              - Effect: Allow
+                Action:
+                  - transcribe:StartTranscriptionJob
+                  - transcribe:GetTranscriptionJob
+                Resource: '*'
+              
+              # SES Access
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ses:FromAddress: !Ref EmailSender
+      Tags:
+        - Key: Application
+          Value: VoicemailSystem
+
+  # ============================================================================
+  # LAMBDA FUNCTION
+  # ============================================================================
+  
+  VoicemailLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: !Ref LambdaTimeout
+      MemorySize: !Ref LambdaMemorySize
+      Environment:
+        Variables:
+          BASE_PATH: !If
+            - CreateBucket
+            - !Sub '${VoicemailBucket}/${S3BucketPrefix}'
+            - !Sub '${S3BucketName}/${S3BucketPrefix}'
+          EMAIL_SENDER: !Ref EmailSender
+          URL_EXPIRATION: !Ref URLExpirationSeconds
+          RECORDING_WAIT_TIME: !Ref RecordingWaitTime
+          DEFAULT_LANGUAGE: !Ref TranscriptionLanguage
+      Code:
+        ZipFile: |
+          # Placeholder code - replace with actual Lambda function
+          # Deploy using: aws lambda update-function-code --function-name [name] --zip-file fileb://function.zip
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': 'Placeholder - upload actual code using deployment script'
+              }
+      Description: !Sub 'Voicemail processing function - deployed by CloudFormation'
+      Tags:
+        - Key: Application
+          Value: VoicemailSystem
+        - Key: ManagedBy
+          Value: CloudFormation
+          
+  LambdaPermissionForConnect:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref VoicemailLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: connect.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Ref ConnectInstanceArn
+
+  # ============================================================================
+  # CLOUDWATCH LOGS
+  # ============================================================================
+  
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunctionName}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ============================================================================
+  # SNS TOPIC FOR ALARMS
+  # ============================================================================
+  
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: CreateAlarmTopic
+    Properties:
+      DisplayName: Voicemail System Alarms
+      Subscription:
+        - Endpoint: !Ref AlarmEmail
+          Protocol: email
+      Tags:
+        - Key: Application
+          Value: VoicemailSystem
+
+  # ============================================================================
+  # CLOUDWATCH ALARMS
+  # ============================================================================
+  
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateAlarms
+    Properties:
+      AlarmName: !Sub '${LambdaFunctionName}-errors'
+      AlarmDescription: Alert when Lambda function has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref VoicemailLambdaFunction
+      AlarmActions:
+        !If
+          - CreateAlarmTopic
+          - [!Ref AlarmTopic]
+          - []
+      TreatMissingData: notBreaching
+
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateAlarms
+    Properties:
+      AlarmName: !Sub '${LambdaFunctionName}-throttles'
+      AlarmDescription: Alert when Lambda function is throttled
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref VoicemailLambdaFunction
+      AlarmActions:
+        !If
+          - CreateAlarmTopic
+          - [!Ref AlarmTopic]
+          - []
+      TreatMissingData: notBreaching
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateAlarms
+    Properties:
+      AlarmName: !Sub '${LambdaFunctionName}-duration'
+      AlarmDescription: Alert when Lambda execution is slow
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 150000
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref VoicemailLambdaFunction
+      AlarmActions:
+        !If
+          - CreateAlarmTopic
+          - [!Ref AlarmTopic]
+          - []
+      TreatMissingData: notBreaching
+
+  # ============================================================================
+  # CLOUDWATCH DASHBOARD
+  # ============================================================================
+  
+  VoicemailDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: CreateAlarms
+    Properties:
+      DashboardName: !Sub '${LambdaFunctionName}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", {"stat": "Sum", "label": "Invocations"}],
+                  [".", "Errors", {"stat": "Sum", "label": "Errors"}],
+                  [".", "Throttles", {"stat": "Sum", "label": "Throttles"}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "title": "Lambda Invocations",
+                "period": 300,
+                "dimensions": {
+                  "FunctionName": "${VoicemailLambdaFunction}"
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  ["AWS/Lambda", "Duration", {"stat": "Average"}],
+                  ["...", {"stat": "Maximum"}]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "title": "Lambda Duration",
+                "period": 300,
+                "yAxis": {
+                  "left": {
+                    "label": "Milliseconds"
+                  }
+                },
+                "dimensions": {
+                  "FunctionName": "${VoicemailLambdaFunction}"
+                }
+              }
+            },
+            {
+              "type": "log",
+              "properties": {
+                "query": "SOURCE '/aws/lambda/${LambdaFunctionName}'\n| fields @timestamp, @message\n| filter @message like /ERROR/\n| sort @timestamp desc\n| limit 20",
+                "region": "${AWS::Region}",
+                "title": "Recent Errors",
+                "stacked": false
+              }
+            }
+          ]
+        }
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt VoicemailLambdaFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaArn'
+      
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Value: !Ref VoicemailLambdaFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaName'
+      
+  S3BucketName:
+    Description: Name of the S3 bucket for recordings
+    Value: !If
+      - CreateBucket
+      - !Ref VoicemailBucket
+      - !Ref S3BucketName
+    Export:
+      Name: !Sub '${AWS::StackName}-S3Bucket'
+      
+  S3RecordingPath:
+    Description: Full S3 path for recordings (use as BASE_PATH)
+    Value: !If
+      - CreateBucket
+      - !Sub '${VoicemailBucket}/${S3BucketPrefix}'
+      - !Sub '${S3BucketName}/${S3BucketPrefix}'
+    Export:
+      Name: !Sub '${AWS::StackName}-S3Path'
+      
+  IAMRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RoleArn'
+      
+  AlarmTopicArn:
+    Condition: CreateAlarmTopic
+    Description: ARN of the SNS topic for alarms
+    Value: !Ref AlarmTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-AlarmTopic'
+      
+  DashboardURL:
+    Condition: CreateAlarms
+    Description: URL to CloudWatch Dashboard
+    Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${LambdaFunctionName}-dashboard'
+    
+  NextSteps:
+    Description: Next steps to complete setup
+    Value: |
+      1. Deploy Lambda code: aws lambda update-function-code --function-name [name] --zip-file fileb://function.zip
+      2. Verify SES email: aws ses verify-email-identity --email-address [sender]
+      3. Import Connect flow: Upload connect-flow/VoiceMailModule.json
+      4. Update Lambda ARN in Connect flow
+      5. Test the system
+      
+  ConfigurationSummary:
+    Description: Configuration summary
+    Value: !Sub |
+      Lambda: ${VoicemailLambdaFunction}
+      S3 Bucket: ${S3BucketName}
+      Email Sender: ${EmailSender}
+      Recording Wait: ${RecordingWaitTime}s
+      URL Expiration: ${URLExpirationSeconds}s

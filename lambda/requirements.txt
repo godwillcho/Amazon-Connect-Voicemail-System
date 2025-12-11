@@ -1,0 +1,6 @@
+# AWS Lambda comes with boto3 pre-installed
+# No additional Python packages required for deployment
+
+# For local development/testing only:
+# boto3>=1.26.0
+# botocore>=1.29.0
