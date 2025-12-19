@@ -1,12 +1,206 @@
 """
 AWS Lambda function for processing Amazon Connect voicemail recordings.
-Invoked immediately after beep, waits for recording completion, then transcribes and emails.
+Also serves as Function URL endpoint for generating presigned URLs on-demand.
 
-Environment Variables:
-    BASE_PATH: S3 bucket/prefix (required)
-    EMAIL_SENDER: Sender email address (required)
-    URL_EXPIRATION: Presigned URL expiration seconds (default: 604800)
-    RECORDING_WAIT_TIME: Wait time before searching for recording (default: 70)
+================================================================================
+SETUP INSTRUCTIONS
+================================================================================
+
+STEP 1: GENERATE SIGNING SECRET
+--------------------------------
+Run this command in your terminal:
+    openssl rand -base64 32
+
+Copy the output (e.g., "k7vM3nQ9pL2xR8wT5yH1bN6mJ4cV0gF3sA7dE9uI2oP=")
+
+
+STEP 2: CREATE LAMBDA FUNCTION
+--------------------------------
+1. Go to AWS Lambda Console
+2. Create new function or update existing one
+3. Paste this entire code into the code editor
+4. Click "Deploy"
+
+
+STEP 3: CREATE FUNCTION URL
+--------------------------------
+1. In Lambda Console, go to Configuration → Function URL
+2. Click "Create function URL"
+3. Auth type: NONE
+4. Click "Save"
+5. Copy the Function URL (e.g., "https://abc123.lambda-url.us-east-1.on.aws/")
+
+
+STEP 4: CONFIGURE ENVIRONMENT VARIABLES
+--------------------------------
+In Lambda Console, go to Configuration → Environment variables → Edit
+
+Add these 6 variables:
+
+    BASE_PATH              = your-bucket-name/recordings
+    EMAIL_SENDER           = voicemail@yourdomain.com
+    URL_EXPIRATION         = 604800
+    RECORDING_WAIT_TIME    = 70
+    SIGNING_SECRET         = (paste from Step 1)
+    REDIRECT_API_URL       = (paste from Step 3)
+
+
+STEP 5: UPDATE IAM PERMISSIONS
+--------------------------------
+Your Lambda execution role needs these permissions:
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:HeadObject"],
+            "Resource": "arn:aws:s3:::YOUR-BUCKET/*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["transcribe:StartTranscriptionJob", "transcribe:GetTranscriptionJob"],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "ses:SendEmail",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+            "Resource": "*"
+        }
+    ]
+}
+
+To add: IAM Console → Roles → Your Lambda Role → Add permissions → Create inline policy
+
+
+STEP 6: CONFIGURE LAMBDA SETTINGS
+--------------------------------
+1. Go to Configuration → General configuration → Edit
+2. Set Memory: 512 MB (or higher)
+3. Set Timeout: 15 minutes (900 seconds)
+4. Click "Save"
+
+
+STEP 7: VERIFY SES EMAIL
+--------------------------------
+1. Go to Amazon SES Console
+2. Click "Verified identities"
+3. Add and verify your EMAIL_SENDER address
+4. If in sandbox, also verify recipient addresses
+
+
+STEP 8: CONFIGURE AMAZON CONNECT
+--------------------------------
+In your Amazon Connect contact flow:
+
+1. Add "Set recording and analytics behavior" block
+   - Set recording behavior: Enable
+   - Place BEFORE customer speaks
+
+2. Add "Set contact attributes" block
+   - Destination key: emailRecipient
+   - Value: support@company.com (or dynamic value)
+   
+   (Optional)
+   - Destination key: RecipientName
+   - Value: Support Team
+
+3. Add "Invoke AWS Lambda function" block
+   - Select this Lambda function
+   - Place AFTER recording completes
+
+4. Publish contact flow
+
+
+STEP 9: TEST
+--------------------------------
+1. Call your Amazon Connect number
+2. Leave a voicemail
+3. Check email for notification
+4. Click the link - voicemail should play
+
+
+TROUBLESHOOTING
+--------------------------------
+Check CloudWatch Logs for:
+    [SUCCESS] Found at s3://...        ← Recording found
+    [TRANSCRIBE START]                 ← Transcription started
+    [SIGNED URL] Created               ← URL generated
+    [EMAIL SENT]                       ← Email sent successfully
+
+Common Issues:
+    "Missing emailRecipient"           → Set attribute in contact flow
+    "Recording not found"              → Check BASE_PATH and recording enabled
+    "403 Forbidden" on link click      → Verify SIGNING_SECRET matches
+    "Email send failed"                → Verify SES email and permissions
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+Required:
+    BASE_PATH: S3 bucket/prefix for recordings (e.g., "my-bucket/recordings")
+    EMAIL_SENDER: Sender email address (must be verified in SES)
+    SIGNING_SECRET: Secret key for HMAC URL signing (generate with openssl)
+    REDIRECT_API_URL: Lambda Function URL (from Configuration → Function URL)
+
+Optional (with defaults):
+    URL_EXPIRATION: Link expiration in seconds (default: 604800 = 7 days)
+    RECORDING_WAIT_TIME: Wait time for recording upload (default: 70 seconds)
+
+================================================================================
+AMAZON CONNECT REQUIREMENTS
+================================================================================
+
+Your contact flow must:
+    1. Enable call recording (Set recording behavior block)
+    2. Set "emailRecipient" attribute (REQUIRED)
+    3. Set "RecipientName" attribute (optional, defaults to email)
+    4. Invoke this Lambda function after recording
+
+Event structure Lambda receives:
+    {
+        "Details": {
+            "ContactData": {
+                "InitialContactId": "abc-123",           ← Used to find recording
+                "CustomerEndpoint": {
+                    "Address": "+18607866359"            ← Caller number
+                },
+                "InstanceARN": "arn:aws:connect:...",    ← Determines region
+                "Attributes": {
+                    "emailRecipient": "user@example.com", ← REQUIRED
+                    "RecipientName": "John Smith"         ← Optional
+                }
+            }
+        }
+    }
+
+================================================================================
+HOW IT WORKS
+================================================================================
+
+1. Amazon Connect records voicemail → uploads to S3
+2. Contact flow invokes this Lambda
+3. Lambda waits for recording to finish uploading
+4. Lambda searches S3 for recording file
+5. Lambda transcribes audio using AWS Transcribe
+6. Lambda generates secure signed URL (valid 7 days)
+7. Lambda sends email with transcription and link
+8. User clicks link → Lambda validates signature → redirects to S3
+9. Voicemail plays in browser
+
+Security:
+    - URLs are cryptographically signed (HMAC-SHA256)
+    - URLs expire after configured time
+    - Signature prevents tampering
+    - No API Gateway needed (uses Function URL)
+
+================================================================================
 """
 
 import os
@@ -14,11 +208,14 @@ import json
 import boto3
 import logging
 import time
+import hmac
+import hashlib
 import urllib.request
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from botocore.exceptions import ClientError
 from botocore.config import Config
+from urllib.parse import quote, unquote
 
 # Logging
 logger = logging.getLogger()
@@ -45,6 +242,185 @@ class VoicemailProcessingError(Exception):
 class TranscriptionError(VoicemailProcessingError):
     """Raised when transcription fails."""
     pass
+
+
+# =============================================================================
+# URL SIGNING FUNCTIONS
+# =============================================================================
+
+def generate_signed_url(redirect_api_url: str, bucket: str, key: str, secret_key: str, validity_hours: int = 168) -> str:
+    """Generate a signed URL that expires after validity_hours."""
+    # Calculate expiration timestamp
+    expires = int(time.time()) + (validity_hours * 3600)
+    
+    # Create signature
+    message = f"{bucket}:{key}:{expires}"
+    signature = hmac.new(
+        secret_key.encode(),
+        message.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    
+    # URL-encode the key
+    encoded_key = quote(key, safe='')
+    
+    # Build the signed URL
+    url = f"{redirect_api_url}/voicemail/{bucket}/{encoded_key}?expires={expires}&signature={signature}"
+    
+    return url
+
+
+def verify_signature(bucket: str, key: str, expires: str, signature: str, secret_key: str) -> bool:
+    """Verify the URL signature."""
+    message = f"{bucket}:{key}:{expires}"
+    expected_signature = hmac.new(
+        secret_key.encode(),
+        message.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    
+    return hmac.compare_digest(signature, expected_signature)
+
+
+# =============================================================================
+# FUNCTION URL HANDLER (URL GENERATION)
+# =============================================================================
+
+def handle_url_generation(event: dict) -> dict:
+    """
+    Handle Function URL request to generate presigned URL.
+    Expected path: /voicemail/{bucket}/{key}?expires={timestamp}&signature={hmac}
+    """
+    try:
+        # Extract path and query parameters from Function URL event
+        raw_path = event.get('rawPath', '')
+        query_parameters = event.get('queryStringParameters') or {}
+        
+        # Parse path: /voicemail/{bucket}/{remaining_key_path}
+        if not raw_path.startswith('/voicemail/'):
+            logger.warning(f"Invalid path: {raw_path}")
+            return {
+                'statusCode': 404,
+                'headers': {'Content-Type': 'text/html'},
+                'body': '<h1>404 Not Found</h1><p>Invalid path</p>'
+            }
+        
+        # Remove '/voicemail/' prefix and split into bucket and key
+        path_after_voicemail = raw_path[11:]  # Remove '/voicemail/'
+        
+        if not path_after_voicemail or '/' not in path_after_voicemail:
+            logger.warning("Missing bucket or key in path")
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'text/html'},
+                'body': '<h1>400 Bad Request</h1><p>Missing bucket or key</p>'
+            }
+        
+        # Split at first '/' to get bucket and key
+        bucket, key_encoded = path_after_voicemail.split('/', 1)
+        
+        # Get query parameters
+        expires = query_parameters.get('expires')
+        signature = query_parameters.get('signature')
+        
+        if not expires or not signature:
+            logger.warning("Missing expires or signature parameter")
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'text/html'},
+                'body': '<h1>400 Bad Request</h1><p>Missing required parameters</p>'
+            }
+        
+        # Decode the key (it's URL-encoded)
+        key = unquote(key_encoded)
+        
+        # Check expiration
+        try:
+            expires_timestamp = int(expires)
+            current_timestamp = int(time.time())
+            
+            if current_timestamp > expires_timestamp:
+                expires_date = datetime.fromtimestamp(expires_timestamp).strftime('%Y-%m-%d %H:%M:%S UTC')
+                logger.warning(f"Link expired: {expires_date}")
+                return {
+                    'statusCode': 403,
+                    'headers': {'Content-Type': 'text/html'},
+                    'body': f'<h1>403 Forbidden</h1><p>This link expired on {expires_date}.</p><p>Please contact support for a new link.</p>'
+                }
+        except ValueError:
+            logger.warning("Invalid expiration timestamp")
+            return {
+                'statusCode': 400,
+                'headers': {'Content-Type': 'text/html'},
+                'body': '<h1>400 Bad Request</h1><p>Invalid expiration timestamp</p>'
+            }
+        
+        # Get signing secret
+        signing_secret = os.environ.get('SIGNING_SECRET', '')
+        if not signing_secret:
+            logger.error("SIGNING_SECRET not configured")
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'text/html'},
+                'body': '<h1>500 Internal Server Error</h1><p>Server configuration error</p>'
+            }
+        
+        # Verify signature
+        if not verify_signature(bucket, key, expires, signature, signing_secret):
+            logger.warning(f"Invalid signature for {bucket}/{key}")
+            return {
+                'statusCode': 403,
+                'headers': {'Content-Type': 'text/html'},
+                'body': '<h1>403 Forbidden</h1><p>Invalid signature. This link may have been tampered with.</p>'
+            }
+        
+        # Generate presigned URL
+        region = os.environ.get('AWS_REGION', 'us-east-1')
+        boto_config = Config(region_name=region, signature_version='s3v4')
+        s3_client = boto3.client('s3', config=boto_config)
+        
+        # Verify the object exists before generating URL
+        try:
+            s3_client.head_object(Bucket=bucket, Key=key)
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == '404':
+                logger.error(f"Recording not found: s3://{bucket}/{key}")
+                return {
+                    'statusCode': 404,
+                    'headers': {'Content-Type': 'text/html'},
+                    'body': '<h1>404 Not Found</h1><p>Recording not found. It may have been deleted.</p>'
+                }
+            raise
+        
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': bucket,
+                'Key': key,
+                'ResponseContentType': 'audio/wav',
+                'ResponseContentDisposition': 'inline'
+            },
+            ExpiresIn=3600  # 1 hour to listen
+        )
+        
+        logger.info(f"[URL GENERATED] s3://{bucket}/{key}")
+        
+        # Redirect to the presigned URL
+        return {
+            'statusCode': 302,
+            'headers': {
+                'Location': presigned_url,
+                'Cache-Control': 'no-cache, no-store, must-revalidate'
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating URL: {e}", exc_info=True)
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'text/html'},
+            'body': '<h1>500 Internal Server Error</h1><p>Failed to generate URL</p>'
+        }
 
 
 # =============================================================================
@@ -326,7 +702,7 @@ def find_recording_in_s3(
 # =============================================================================
 
 def create_html_email(
-    caller_number: str, preview: str, presigned_url: str, 
+    caller_number: str, preview: str, redirect_url: str, 
     recipient_name: str, recording_duration: float = 0.0
 ) -> str:
     """Create HTML email body with voicemail details."""
@@ -356,7 +732,7 @@ def create_html_email(
                 <h2>Voicemail for: {recipient_name}</h2>
                 <p>There is a voicemail from <strong>{caller_number}</strong>.</p>
             </div>
-            <p><a href="{presigned_url}">Listen to the voicemail.</a></p>
+            <p><a href="{redirect_url}">Listen to the voicemail.</a></p>
             {duration_text}
             <h3>Voicemail transcription</h3>
             <div class="preview">{preview}</div>
@@ -367,7 +743,7 @@ def create_html_email(
 
 
 def create_text_email(
-    caller_number: str, preview: str, presigned_url: str,
+    caller_number: str, preview: str, redirect_url: str,
     recipient_name: str, recording_duration: float = 0.0
 ) -> str:
     """Create plain text email body as fallback."""
@@ -385,18 +761,18 @@ Voicemail transcription:
 {preview}
 
 Listen to the full recording here:
-{presigned_url}
+{redirect_url}
 """.strip()
 
 
 def send_email_with_recording(
     ses_client, email_sender: str, email_recipient: str, caller_number: str,
-    preview: str, presigned_url: str, recipient_name: str, recording_duration: float = 0.0
+    preview: str, redirect_url: str, recipient_name: str, recording_duration: float = 0.0
 ) -> dict:
     """Send email notification with voicemail details."""
     subject = f"Voicemail message from: {caller_number}"
-    html_body = create_html_email(caller_number, preview, presigned_url, recipient_name, recording_duration)
-    text_body = create_text_email(caller_number, preview, presigned_url, recipient_name, recording_duration)
+    html_body = create_html_email(caller_number, preview, redirect_url, recipient_name, recording_duration)
+    text_body = create_text_email(caller_number, preview, redirect_url, recipient_name, recording_duration)
     
     return ses_client.send_email(
         FromEmailAddress=email_sender,
@@ -414,11 +790,11 @@ def send_email_with_recording(
 
 
 # =============================================================================
-# MAIN HANDLER
+# VOICEMAIL PROCESSING HANDLER
 # =============================================================================
 
-def lambda_handler(event: dict, context) -> dict:
-    """Main Lambda handler for voicemail processing."""
+def handle_voicemail_processing(event: dict, context) -> dict:
+    """Handle Amazon Connect voicemail processing."""
     logger.info("=" * 80)
     logger.info("VOICEMAIL PROCESSING STARTED")
     logger.info("=" * 80)
@@ -543,29 +919,40 @@ def lambda_handler(event: dict, context) -> dict:
         logger.error(f"Transcription processing error: {e}")
         return {"statusCode": 500, "message": "Transcription processing error"}
     
-    # Generate presigned URL
+    # Generate signed redirect URL
     try:
-        presigned_url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={
-                "Bucket": bucket,
-                "Key": key,
-                "ResponseContentType": "audio/wav",
-                "ResponseContentDisposition": "inline"
-            },
-            ExpiresIn=url_expiration
+        redirect_api_url = os.environ.get("REDIRECT_API_URL", "").rstrip("/")
+        signing_secret = os.environ.get("SIGNING_SECRET", "")
+        
+        if not redirect_api_url:
+            raise ValueError("REDIRECT_API_URL environment variable not set")
+        if not signing_secret:
+            raise ValueError("SIGNING_SECRET environment variable not set")
+        
+        # Calculate validity in hours from URL_EXPIRATION (in seconds)
+        validity_hours = url_expiration // 3600
+        
+        # Generate signed URL
+        redirect_url = generate_signed_url(
+            redirect_api_url,
+            bucket,
+            key,
+            signing_secret,
+            validity_hours
         )
-        logger.info("[PRESIGNED URL] Created")
+        
+        logger.info(f"[SIGNED URL] Created (valid for {validity_hours} hours)")
+        
     except Exception as e:
-        logger.error(f"Error generating presigned URL: {e}")
-        return {"statusCode": 500, "message": "Error generating presigned URL"}
+        logger.error(f"Error generating signed URL: {e}")
+        return {"statusCode": 500, "message": "Error generating signed URL"}
     
     # Send email
     try:
         logger.info("Sending email...")
         response = send_email_with_recording(
             ses_client, email_sender, email_recipient, caller_number,
-            preview, presigned_url, recipient_name, duration
+            preview, redirect_url, recipient_name, duration
         )
         
         message_id = response.get("MessageId")
@@ -588,3 +975,36 @@ def lambda_handler(event: dict, context) -> dict:
     except Exception as e:
         logger.error(f"Email error: {e}")
         return {"statusCode": 500, "message": "Email error"}
+
+
+# =============================================================================
+# MAIN HANDLER (ROUTER)
+# =============================================================================
+
+def lambda_handler(event: dict, context) -> dict:
+    """
+    Main Lambda handler that routes between:
+    1. Function URL requests (URL generation/validation)
+    2. Amazon Connect events (voicemail processing)
+    """
+    
+    # Log the incoming event for debugging
+    logger.info(f"Event type check - Keys: {list(event.keys())}")
+    
+    # Check if this is a Function URL request (HTTP request)
+    if 'requestContext' in event and 'http' in event.get('requestContext', {}):
+        logger.info("Handling Function URL request (URL generation)")
+        return handle_url_generation(event)
+    
+    # Check if this is an Amazon Connect event
+    elif 'Details' in event and 'ContactData' in event.get('Details', {}):
+        logger.info("Handling Amazon Connect event (voicemail processing)")
+        return handle_voicemail_processing(event, context)
+    
+    # Unknown event type
+    else:
+        logger.error(f"Unknown event type. Event keys: {list(event.keys())}")
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': 'Unknown event type'})
+        }
